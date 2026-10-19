@@ -14,15 +14,17 @@ Somente o texto da transcricao vai para o Gemini; o video nunca sai do seu compu
 
 A chave fica guardada so no seu computador, criptografada pelo sistema (Credenciais do Windows / Keychain do Mac).
 
+Os downloads ficam na pagina de **Releases** do repositorio (lado direito da pagina inicial).
+
 ### Windows
-Descompacte a pasta inteira em um caminho **sem acentos** (ex.: `C:\AutoClipper`) e abra `AutoClipper.exe`.
+Baixe `AutoClipper-<versao>-win-x64.zip`, descompacte a pasta inteira em um caminho **sem acentos** (ex.: `C:\AutoClipper`) e abra `AutoClipper.exe`.
 Se o SmartScreen avisar, clique em "Mais informacoes" > "Executar assim mesmo" (o app nao e assinado).
 Aceleracao: usa a GPU (Vulkan: NVIDIA, AMD ou Intel) automaticamente e cai para a CPU se falhar.
 
 ### Mac
-Baixe o zip da sua versao em **Actions > Build macOS > ultimo run > Artifacts**:
-- `AutoClipper-mac-arm64`: Macs com chip Apple (M1, M2, M3, M4)
-- `AutoClipper-mac-x64`: Macs Intel
+Baixe o zip da sua versao em **Releases**:
+- `AutoClipper-<versao>-arm64-mac.zip`: Macs com chip Apple (M1, M2, M3, M4)
+- `AutoClipper-<versao>-mac.zip`: Macs Intel
 
 Descompacte e **na primeira vez** abra com botao direito no app > **Abrir** > **Abrir** (o app nao e assinado pela Apple).
 Se o Mac disser que o app esta "danificado", rode no Terminal: `xattr -cr /caminho/para/AutoClipper.app`
@@ -42,4 +44,10 @@ Para rodar: **Actions > Build macOS > Run workflow**.
 
 ## Licencas
 
-whisper.cpp e o modelo Whisper: MIT. ffmpeg (via ffmpeg-static): GPL; se voce distribuir o app, informe isso e ofereca o codigo-fonte do ffmpeg.
+O codigo do AutoClipper e licenciado sob a [licenca MIT](LICENSE).
+
+O app empacotado inclui componentes de terceiros, cada um com a sua licenca:
+- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) e o modelo Whisper (OpenAI): MIT
+- [Electron](https://www.electronjs.org/): MIT
+- [ffmpeg](https://ffmpeg.org/) (via `ffmpeg-static`): GPL. O AutoClipper o executa como programa separado, sem incorporar o codigo dele. Ao distribuir o app, mantenha este aviso; o codigo-fonte do ffmpeg esta em https://ffmpeg.org/download.html
+- Vulkan (somente o runtime do Windows) e os runtimes do Visual C++ redistribuiveis da Microsoft acompanham o build de Windows

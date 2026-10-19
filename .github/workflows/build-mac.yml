@@ -54,3 +54,25 @@ jobs:
           name: AutoClipper-mac-${{ matrix.arch }}
           path: dist/*.zip
           retention-days: 30
+
+  # On a version tag (git tag v0.1.0 && git push --tags), attach the Mac zips to a GitHub Release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" --title "AutoClipper $TAG" \
+            --notes "Cortes automaticos dos melhores momentos de videos longos. Veja o README para instalar e usar. Mac: arm64 = chips Apple (M1-M4), sem sufixo = Intel."
+          gh release upload "$TAG" artifacts/*.zip --repo "$GITHUB_REPOSITORY" --clobber

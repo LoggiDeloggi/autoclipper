@@ -1,6 +1,10 @@
 {
   "name": "autoclipper",
   "version": "0.1.0",
+  "description": "Encontra os melhores momentos de videos longos e corta em clips prontos para editar",
+  "author": "LoggiDeloggi",
+  "license": "MIT",
+  "repository": "github:LoggiDeloggi/autoclipper",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
