@@ -6,7 +6,10 @@ const path = require('path');
 const ffmpeg = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked'); // binaries can't run from inside asar
 
 const EXE = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
-const GEMINI = 'gemini-2.5-flash'; // free tier, ~1M token context
+// Free tier, ~1M token context. If the first model is overloaded (503) or retired (404), fall back to the "-latest" lite alias,
+// which Google keeps pointing at a current model (names churn: 2.5-flash-lite was already retired for new keys).
+const MODELS = ['gemini-2.5-flash', 'gemini-flash-lite-latest'];
+const RETRY_DELAYS = [4, 8, 15, 25, 40]; // seconds waited before retries 2..6
 const BLOCK = 3600; // seconds of transcript per Gemini call (ponytail: fixed blocks, not token-counted)
 
 // onOut/onErr receive raw chunks (used for progress parsing); stdout is always drained so the child can't block.
@@ -106,9 +109,10 @@ function snap(c, segs) {
   return { ...c, start, end: Math.max(near('end', c.end).end, start) };
 }
 
-async function askGemini(prompt, key) {
-  for (let attempt = 1; ; attempt++) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI}:generateContent`, {
+async function askGemini(prompt, key, onNote) {
+  for (let attempt = 0; ; attempt++) {
+    const model = MODELS[attempt < 2 ? 0 : 1];
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.3, thinkingConfig: { thinkingBudget: 1024 } } }), // bounded "thinking": ~3x faster than the default, same clip count
@@ -119,15 +123,20 @@ async function askGemini(prompt, key) {
       return JSON.parse(text);
     }
     if (r.status === 400 || r.status === 403) throw new Error('Chave do Gemini invalida. Confira em Configuracoes.');
-    if (![429, 500, 503].includes(r.status) || attempt === 3) {
-      throw new Error(r.status === 429 ? 'Limite gratuito do Gemini atingido. Tente novamente mais tarde.' : `Gemini indisponivel (erro ${r.status})`);
+    if (![404, 429, 500, 503].includes(r.status) || attempt === RETRY_DELAYS.length) {
+      throw new Error(
+        r.status === 429
+          ? 'Limite gratuito do Gemini atingido. Tente novamente mais tarde; a transcricao foi salva e sera reaproveitada.'
+          : `O Gemini esta sobrecarregado ou indisponivel (erro ${r.status}). Tente de novo em alguns minutos; a transcricao foi salva e sera reaproveitada.`
+      );
     }
-    await new Promise((res) => setTimeout(res, 5000 * attempt)); // transient: back off and retry
+    onNote && onNote(`Gemini ocupado (erro ${r.status}), tentando de novo (${attempt + 2}/${RETRY_DELAYS.length + 1})`);
+    await new Promise((res) => setTimeout(res, RETRY_DELAYS[attempt] * 1000)); // transient: back off and retry
   }
 }
 
 // One Gemini call per BLOCK seconds of transcript.
-async function collect(segs, key, onPct) {
+async function collect(segs, key, onPct, onNote) {
   const end = segs[segs.length - 1].end;
   const total = Math.ceil(end / BLOCK);
   let done = 0;
@@ -143,7 +152,7 @@ async function collect(segs, key, onPct) {
       `Escolha ate ${want} trechos de 20 a 60 segundos com forte gancho nos primeiros 3s, historia completa, emocao ou polemica. Seja criterioso na nota: reserve 8-10 so para os melhores.\n` +
       `Responda so JSON: {"clips":[{"start":<seg>,"end":<seg>,"score":<1-10>,"title":"<titulo curto>","reason":"<por que pode viralizar, 1 frase>"}]}\n\n` +
       part.map((s) => `[${Math.round(s.start)}] ${s.text}`).join('\n');
-    const clips = (await askGemini(prompt, key)).clips || [];
+    const clips = (await askGemini(prompt, key, onNote)).clips || [];
     onPct(Math.round((++done / total) * 100));
     return clips;
   }));
@@ -151,7 +160,8 @@ async function collect(segs, key, onPct) {
 }
 
 async function rank(segs, key, emit) {
-  const found = await collect(segs, key, (p) => emit(2, p, 'Gemini'));
+  let pct = 0;
+  const found = await collect(segs, key, (p) => emit(2, (pct = p), 'Gemini'), (note) => emit(2, pct, note));
   const max = Math.min(12, Math.max(5, Math.round(segs[segs.length - 1].end / 300))); // final list size grows with video length
   const out = [];
   for (const c of found
@@ -199,11 +209,27 @@ async function processVideo(file, outDir, log = () => {}, cfg) {
   // Scratch audio lives in an ASCII-only folder (ProgramData) because whisper-cli can't take non-ANSI paths; removed when done.
   const work = fs.mkdtempSync(path.join(process.env.ProgramData || os.tmpdir(), 'AutoClipper-'));
   try {
-    const wav = path.join(work, 'audio.wav');
-    emit(0, 0);
-    await ffmpegRun(['-y', '-i', file, '-ar', 16000, '-ac', 1, wav], undefined, (p) => emit(0, p));
-    const segs = await transcribe(wav, cfg, emit, work);
-    if (!segs.length) throw new Error('Nenhuma fala detectada');
+    // Transcription is the slowest step and the Gemini call can still fail afterwards, so the transcript is saved next to the
+    // clips and reused on a retry of the same file.
+    const st = fs.statSync(file);
+    const cacheFile = path.join(outDir, 'transcricao.json');
+    const cacheKey = [st.size, Math.round(st.mtimeMs), path.basename(cfg.model), cfg.lang].join(':');
+    let segs;
+    try {
+      const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      if (c.key === cacheKey) segs = c.segs;
+    } catch {}
+    if (segs) {
+      emit(0, 100);
+      emit(1, 100, 'Transcricao reaproveitada');
+    } else {
+      const wav = path.join(work, 'audio.wav');
+      emit(0, 0);
+      await ffmpegRun(['-y', '-i', file, '-vn', '-ar', 16000, '-ac', 1, wav], undefined, (p) => emit(0, p));
+      segs = await transcribe(wav, cfg, emit, work);
+      if (!segs.length) throw new Error('Nenhuma fala detectada');
+      fs.writeFileSync(cacheFile, JSON.stringify({ key: cacheKey, segs }));
+    }
     emit(2, 0, 'Gemini');
     const clips = await rank(segs, cfg.geminiKey, emit);
     const results = [];
