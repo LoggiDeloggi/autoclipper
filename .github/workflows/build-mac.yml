@@ -1,0 +1,56 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64] # arm64 = Apple Silicon (M1-M4), x64 = Intel
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # whisper.cpp with Metal (Apple GPU), statically linked into one binary + the small model.
+      - name: Build whisper.cpp
+        run: |
+          ARCH=${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}
+          git clone --depth 1 --branch v1.9.5 https://github.com/ggml-org/whisper.cpp.git whisper-src
+          cmake -S whisper-src -B whisper-src/build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_TESTS=OFF -DCMAKE_OSX_ARCHITECTURES=$ARCH \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake --build whisper-src/build --config Release -j --target whisper-cli
+          mkdir whisper-mac
+          cp whisper-src/build/bin/whisper-cli whisper-mac/
+          curl -L --fail -o whisper-mac/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+          file whisper-mac/whisper-cli
+
+      # npm_config_arch makes ffmpeg-static and electron download the binaries for the target arch.
+      - name: Install dependencies
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+        run: npm ci
+
+      - name: Self-check
+        run: npm test
+
+      - name: Package app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac zip --${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoClipper-mac-${{ matrix.arch }}
+          path: dist/*.zip
+          retention-days: 30

@@ -1,0 +1,70 @@
+{
+  "name": "autoclipper",
+  "version": "0.1.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test.js",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.autoclipper.app",
+    "productName": "AutoClipper",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "pipeline.js",
+      "index.html",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "win": {
+      "target": "dir",
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "../whisper-vk",
+          "to": "whisper",
+          "filter": [
+            "whisper-cli.exe",
+            "*.dll"
+          ]
+        },
+        {
+          "from": "../whisper/ggml-small.bin",
+          "to": "whisper/ggml-small.bin"
+        }
+      ]
+    },
+    "mac": {
+      "target": "zip",
+      "category": "public.app-category.video",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extraResources": [
+        {
+          "from": "whisper-mac",
+          "to": "whisper"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3"
+  }
+}

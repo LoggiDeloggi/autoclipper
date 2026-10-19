@@ -1,0 +1,5 @@
+.env
+node_modules/
+dist/
+whisper-mac/
+whisper-src/

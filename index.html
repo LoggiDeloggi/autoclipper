@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; media-src file:; img-src data:">
+<title>AutoClipper</title>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #141821; --panel2: #1a1f2b; --line: #262d3b;
+    --text: #e8ebf2; --muted: #8a93a6; --accent: #7c5cff; --accent2: #22d3ee;
+    --ok: #34d399; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; flex: none; }
+  .logo svg { width: 16px; height: 16px; fill: #fff; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; cursor: pointer; transition: .15s; }
+  button:hover { border-color: #3a4358; background: #212838; }
+  button.primary { background: linear-gradient(135deg, var(--accent), #5b8cff); border: 0; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.1); }
+  main { flex: 1; overflow-y: auto; padding: 28px 24px 40px; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  .hidden { display: none !important; }
+
+  /* drop zone */
+  #drop { border: 2px dashed var(--line); border-radius: 18px; padding: 70px 24px; text-align: center; background: var(--panel); cursor: pointer; transition: .2s; margin-top: 40px; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: #171a28; box-shadow: 0 0 0 4px rgba(124,92,255,.12); }
+  #drop .ico { width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(124,92,255,.25), rgba(34,211,238,.2)); display: grid; place-items: center; }
+  #drop .ico svg { width: 28px; height: 28px; fill: none; stroke: var(--accent2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #drop h2 { margin: 0 0 6px; font-size: 20px; }
+  #drop p { margin: 0 0 20px; color: var(--muted); }
+  .feats { display: flex; gap: 10px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+  .chip { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+
+  /* processing */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .file { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .file .name { font-weight: 600; word-break: break-all; }
+  .file .meta { color: var(--muted); font-size: 12px; }
+  .bar { height: 8px; background: var(--panel2); border-radius: 999px; overflow: hidden; margin-bottom: 22px; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 999px; transition: width .5s; }
+  .steps { display: grid; gap: 10px; }
+  .step { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--panel2); border: 1px solid transparent; color: var(--muted); }
+  .step .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 12px; flex: none; }
+  .step.active { color: var(--text); border-color: var(--accent); }
+  .step.active .dot { border-color: var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
+  .step.done { color: var(--text); }
+  .step.done .dot { background: var(--ok); border-color: var(--ok); color: #06251a; animation: none; }
+  .step .detail { margin-left: auto; font-size: 12px; color: var(--muted); max-width: 55%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .note { margin-top: 16px; color: var(--muted); font-size: 12px; }
+  .error { margin-top: 18px; border: 1px solid rgba(248,113,113,.4); background: rgba(248,113,113,.08); color: var(--err); border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; }
+
+  .step.active { background: linear-gradient(90deg, rgba(124,92,255,.28) var(--p, 0%), var(--panel2) var(--p, 0%)); }
+  .step .pct { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; color: var(--text); }
+
+  /* settings dialog */
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 24px; width: min(520px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h3 { margin: 0 0 16px; font-size: 18px; }
+  dialog h4 { margin: 0 0 6px; font-size: 14px; }
+  .cfgsec { padding: 14px 0; border-top: 1px solid var(--line); }
+  .cfgsec p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+  .line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .line.end { justify-content: flex-end; margin-top: 8px; }
+  dialog input[type=password] { flex: 1; min-width: 200px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  dialog a { color: var(--accent2); font-size: 12px; display: inline-block; margin-top: 8px; }
+  dialog select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+
+  /* results */
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .head h2 { margin: 0; font-size: 20px; }
+  .head .count { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; }
+  .clip { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; transition: .15s; }
+  .clip:hover { border-color: #3a4358; transform: translateY(-2px); }
+  .clip video { width: 100%; aspect-ratio: 9 / 16; background: #000; display: block; }
+  .clip .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .clip .title { font-weight: 600; line-height: 1.3; }
+  .clip .row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .score { font-weight: 700; padding: 2px 9px; border-radius: 999px; background: rgba(52,211,153,.15); color: var(--ok); }
+  .score.mid { background: rgba(251,191,36,.15); color: #fbbf24; }
+  .score.low { background: rgba(248,113,113,.15); color: var(--err); }
+  .clip button { padding: 6px 10px; font-size: 12px; }
+  .rank { font-weight: 700; padding: 2px 9px; border-radius: 999px; background: var(--panel2); color: var(--muted); }
+  .clip.top { border-color: #c9a227; box-shadow: 0 0 0 1px rgba(201,162,39,.35); }
+  .clip.top .rank { background: rgba(201,162,39,.2); color: #f5c542; }
+  .reason { color: var(--muted); font-size: 12px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+  <div><h1>AutoClipper</h1><div class="sub">Cortes dos melhores momentos a partir dos seus videos</div></div>
+  <div class="spacer"></div>
+  <button id="cfg">⚙ Configuracoes</button>
+  <button id="folder" class="hidden">Abrir pasta</button>
+  <button id="again" class="primary hidden">Novo video</button>
+</header>
+
+<main><div class="wrap">
+  <section id="drop">
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg></div>
+    <h2>Arraste um video aqui</h2>
+    <p>ou clique para escolher o arquivo (mp4, mkv, mov, webm, avi)</p>
+    <button class="primary">Escolher video</button>
+    <div class="feats">
+      <span class="chip">100% local e gratis</span>
+      <span class="chip">Cortes na qualidade original</span>
+      <span class="chip">Sem legenda, pronto para editar</span>
+    </div>
+  </section>
+
+  <section id="work" class="hidden">
+    <div class="card">
+      <div class="file">
+        <div class="logo"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+        <div><div class="name" id="fname"></div><div class="meta" id="fmeta">Processando</div></div>
+      </div>
+      <div class="bar"><i id="pbar"></i></div>
+      <div class="steps" id="steps"></div>
+      <div class="note" id="note">Lives longas podem levar varios minutos. Nao feche a janela.</div>
+      <div class="error hidden" id="err"></div>
+    </div>
+  </section>
+
+  <section id="results" class="hidden">
+    <div class="head"><h2>Clips gerados</h2><span class="count" id="count"></span></div>
+    <div class="grid" id="grid"></div>
+  </section>
+</div></main>
+
+<dialog id="dlg">
+  <h3>Configuracoes</h3>
+  <div class="cfgsec" style="border-top:0">
+    <h4>Chave do Gemini (obrigatoria)</h4>
+    <p id="keyst"></p>
+    <div class="line"><input id="key" type="password" placeholder="Cole sua chave (AIza...)" autocomplete="off"><button id="savekey" class="primary">Salvar</button></div>
+    <a href="#" id="getkey">Criar chave gratuita no Google AI Studio</a>
+  </div>
+  <div class="cfgsec">
+    <h4>Aceleracao da transcricao</h4>
+    <p id="gpust"></p>
+    <div class="line">
+      <select id="mode">
+        <option value="auto">Automatico (recomendado)</option>
+        <option value="cpu">Somente CPU</option>
+      </select>
+      <button id="gpuinst">Baixar NVIDIA CUDA (653 MB)</button>
+      <button id="gpurm">Remover CUDA</button>
+    </div>
+    <div class="bar hidden" id="gpubar" style="margin:12px 0 0"><i id="gpubari"></i></div>
+  </div>
+  <div class="line end"><button id="close">Fechar</button></div>
+</dialog>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const STEPS = [
+    { key: 'Extraindo', label: 'Extraindo audio' },
+    { key: 'Transcrevendo', label: 'Transcrevendo a fala (whisper.cpp)' },
+    { key: 'Escolhendo', label: 'Escolhendo os melhores trechos (Gemini)' },
+    { key: 'Renderizando', label: 'Cortando os clips' },
+  ];
+  const WEIGHTS = [5, 55, 10, 30]; // rough share of total time per step, for the overall %
+  let current = -1, pcts = [0, 0, 0, 0], outDir = '', t0 = 0, timer = null;
+
+  $('steps').innerHTML = STEPS.map((s, i) =>
+    `<div class="step" id="s${i}"><span class="dot"></span><span>${s.label}</span><span class="detail" id="d${i}"></span><span class="pct" id="p${i}"></span></div>`).join('');
+
+  const show = (id) => { for (const s of ['drop', 'work', 'results']) $(s).classList.toggle('hidden', s !== id); };
+  const fileUrl = (p) => 'file:///' + encodeURI(p.replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
+  const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+
+  const overall = () => Math.round(WEIGHTS.reduce((a, w, i) => a + w * (i < current ? 100 : i === current ? pcts[i] : 0), 0) / 100);
+  const clock = () => { const s = Math.floor((Date.now() - t0) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+  function paint() {
+    STEPS.forEach((_, i) => {
+      const el = $('s' + i), p = i < current ? 100 : i === current ? pcts[i] : 0;
+      el.classList.toggle('done', i < current);
+      el.classList.toggle('active', i === current);
+      el.style.setProperty('--p', p + '%');
+      el.querySelector('.dot').textContent = i < current ? '✓' : '';
+      $('p' + i).textContent = i <= current ? p + '%' : '';
+    });
+    const o = overall();
+    $('pbar').style.width = o + '%';
+    $('fmeta').textContent = `Processando · ${o}% · ${clock()}`;
+  }
+
+  window.api.onLog(({ step, pct, msg }) => {
+    current = step;
+    if (step < STEPS.length) { pcts[step] = pct; $('d' + step).textContent = msg; }
+    paint();
+  });
+
+  async function loadCfg() {
+    const s = await window.api.getSettings();
+    $('keyst').textContent = s.hasKey ? `Chave salva (termina em ${s.keyHint}). Cole outra para trocar.` : 'Nenhuma chave salva. Ela e necessaria para escolher os melhores trechos.';
+    $('gpust').textContent = `Placas detectadas: ${s.gpus.length ? s.gpus.join(', ') : 'nenhuma'}. O automatico usa a melhor opcao disponivel: CUDA (NVIDIA, se baixado), depois GPU via Vulkan (AMD, Intel ou NVIDIA) e, por fim, a CPU. Se um modo falhar, o app tenta o proximo.`;
+    if (s.platform === 'darwin') $('gpust').textContent = 'Mac: a transcricao usa a GPU da Apple (Metal) automaticamente. Se falhar, o app usa a CPU.';
+    $('gpuinst').classList.toggle('hidden', !s.nvidia || s.gpuInstalled);
+    $('gpurm').classList.toggle('hidden', !s.gpuInstalled);
+    $('mode').value = s.mode === 'cpu' ? 'cpu' : 'auto';
+    return s;
+  }
+  $('cfg').onclick = async () => { await loadCfg(); $('dlg').showModal(); };
+  $('close').onclick = () => $('dlg').close();
+  $('getkey').onclick = (e) => { e.preventDefault(); window.api.openKeysPage(); };
+  $('savekey').onclick = async () => {
+    const k = $('key').value.trim();
+    if (!k) return;
+    await window.api.saveKey(k);
+    $('key').value = '';
+    await loadCfg();
+  };
+  $('mode').onchange = (e) => window.api.setMode(e.target.value);
+  $('gpurm').onclick = async () => { await window.api.removeGpu(); await loadCfg(); };
+  window.api.onGpuProgress((p) => { $('gpubari').style.width = p + '%'; $('gpust').textContent = `Baixando... ${p}%`; });
+  $('gpuinst').onclick = async () => {
+    $('gpuinst').disabled = true; $('gpubar').classList.remove('hidden');
+    const r = await window.api.installGpu();
+    $('gpuinst').disabled = false; $('gpubar').classList.add('hidden');
+    await loadCfg();
+    if (r.error) $('gpust').textContent = 'Falhou: ' + r.error;
+  };
+
+  async function start(file) {
+    if (!file) return;
+    if (!(await window.api.getSettings()).hasKey) { $('cfg').click(); return; }
+    current = 0; pcts = [0, 0, 0, 0]; t0 = Date.now();
+    clearInterval(timer); timer = setInterval(paint, 1000);
+    $('fname').textContent = file.split(/[\\/]/).pop();
+    $('fmeta').textContent = 'Processando';
+    $('err').classList.add('hidden');
+    $('note').classList.remove('hidden');
+    STEPS.forEach((_, i) => ($('d' + i).textContent = ''));
+    paint(); show('work');
+    const r = await window.api.run(file);
+    clearInterval(timer);
+    if (r.error) {
+      $('fmeta').textContent = 'Falhou';
+      $('err').textContent = r.error;
+      $('err').classList.remove('hidden');
+      $('note').classList.add('hidden');
+      $('again').classList.remove('hidden');
+      return;
+    }
+    outDir = r.outDir;
+    $('count').textContent = `${r.clips.length} ${r.clips.length === 1 ? 'clip' : 'clips'}`;
+    $('grid').innerHTML = '';
+    for (const [i, c] of r.clips.entries()) {
+      const cls = c.score >= 8 ? '' : c.score >= 5 ? 'mid' : 'low';
+      const d = document.createElement('div');
+      d.className = 'clip' + (i < 3 ? ' top' : '');
+      d.innerHTML = `<video controls preload="metadata"></video>
+        <div class="body"><div class="title"></div>
+        <div class="row"><span class="rank">${i === 0 ? '🏆 #1' : '#' + (i + 1)}</span><span class="score ${cls}">${Number(c.score) || '-'}/10</span><span>${mmss(c.end - c.start)}</span><span>${mmss(c.start)} - ${mmss(c.end)}</span></div>
+        <div class="reason"></div>
+        <button>Mostrar na pasta</button></div>`;
+      d.querySelector('video').src = fileUrl(c.file);
+      d.querySelector('.reason').textContent = c.reason || '';
+      d.querySelector('.title').textContent = c.title || 'Clip';
+      d.querySelector('button').onclick = () => window.api.reveal(c.file);
+      $('grid').appendChild(d);
+    }
+    if (!r.clips.length) $('grid').textContent = 'Nenhum trecho adequado encontrado.';
+    show('results');
+    $('folder').classList.remove('hidden');
+    $('again').classList.remove('hidden');
+  }
+
+  const pick = async () => start(await window.api.pick());
+  $('drop').onclick = pick;
+  $('again').onclick = () => { $('folder').classList.add('hidden'); $('again').classList.add('hidden'); show('drop'); };
+  $('folder').onclick = () => window.api.openFolder(outDir);
+  $('drop').addEventListener('dragenter', () => $('drop').classList.add('over'));
+  $('drop').addEventListener('dragleave', () => $('drop').classList.remove('over'));
+  window.addEventListener('drop', () => $('drop').classList.remove('over'));
+  window.addEventListener('message', (e) => {
+    if (e.source === window && e.data && e.data.type === 'dropped' && !$('drop').classList.contains('hidden')) start(e.data.path);
+  });
+</script>
+</body>
+</html>
