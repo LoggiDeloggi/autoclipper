@@ -50,6 +50,7 @@ function config() {
   return {
     geminiKey: getKey(),
     mode: load().mode || 'auto', // 'auto' | 'cpu' | 'cuda' (see transcribe in pipeline.js)
+    cuts: load().cuts === 'precise' ? 'precise' : 'fast', // see render in pipeline.js
     lang: 'pt',
     whisperDir: app.isPackaged ? base : path.join(__dirname, '..', 'whisper-vk'),
     model: path.join(base, 'ggml-small.bin'),
@@ -83,9 +84,10 @@ app.whenReady().then(() => {
   // The key itself never goes back to the page; only a hint of its last 4 characters.
   ipcMain.handle('settings-get', async () => {
     const key = getKey();
-    return { platform: process.platform, hasKey: !!key, keyHint: key.slice(-4), mode: config().mode, gpuInstalled: gpuInstalled(), nvidia: await hasNvidia(), gpus: await listGpus() };
+    return { platform: process.platform, hasKey: !!key, keyHint: key.slice(-4), mode: config().mode, cuts: config().cuts, gpuInstalled: gpuInstalled(), nvidia: await hasNvidia(), gpus: await listGpus() };
   });
   ipcMain.handle('save-key', (_e, key) => save({ key: safeStorage.encryptString(String(key).trim()).toString('base64') }));
+  ipcMain.handle('set-cuts', (_e, cuts) => save({ cuts: cuts === 'precise' ? 'precise' : 'fast' }));
   ipcMain.handle('set-mode', (_e, mode) => save({ mode: ['auto', 'cpu', 'cuda'].includes(mode) ? mode : 'auto' }));
 
   ipcMain.handle('gpu-install', async () => {
@@ -126,7 +128,8 @@ app.whenReady().then(() => {
   ipcMain.handle('run', async (_e, file) => {
     const outDir = path.join(path.dirname(file), path.basename(file, path.extname(file)) + '_clips');
     try {
-      return { clips: await clip(file, outDir, (m) => win.webContents.send('log', m), config()), outDir };
+      const r = await clip(file, outDir, (m) => win.webContents.send('log', m), config());
+      return { clips: r.clips, timings: r.timings, outDir };
     } catch (e) {
       return { error: e.message };
     }

@@ -44,8 +44,8 @@ function ffmpegRun(args, opts, onPct, total) {
   );
 }
 
-// Lists Vulkan devices with a throwaway run and returns the index of the best one (a discrete GPU beats an integrated one,
-// which whisper would otherwise pick first on hybrid laptops and run ~4x slower), or -1 if there is no Vulkan GPU.
+// Lists Vulkan devices with a throwaway run and returns the best one as {i, name} (a discrete GPU beats an integrated one,
+// which whisper would otherwise pick first on hybrid laptops and run ~4x slower), or null if there is no Vulkan GPU.
 async function pickVulkanDevice(cfg, work) {
   const probe = path.join(work, 'probe.wav');
   await ffmpegRun(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', 1, probe], undefined, () => {});
@@ -54,8 +54,8 @@ async function pickVulkanDevice(cfg, work) {
   try {
     await run(path.join(cfg.whisperDir, EXE), ['-m', cfg.model, '-f', probe, '-l', cfg.lang], undefined, grab, grab);
   } catch {}
-  const devs = [...out.matchAll(/ggml_vulkan: (\d+) = .*?\| uma: (\d)/g)].map((m) => ({ i: +m[1], integrated: m[2] === '1' }));
-  return devs.length ? (devs.find((d) => !d.integrated) || devs[0]).i : -1;
+  const devs = [...out.matchAll(/ggml_vulkan: (\d+) = (.*?) \| uma: (\d)/g)].map((m) => ({ i: +m[1], name: m[2], integrated: m[3] === '1' }));
+  return devs.length ? devs.find((d) => !d.integrated) || devs[0] : null;
 }
 
 // Tries engines fastest-first and falls through on failure, always ending at forced CPU:
@@ -74,7 +74,7 @@ async function transcribe(wav, cfg, emit, work) {
   } else if (cfg.mode !== 'cpu') {
     emit(1, 0, 'Detectando GPU');
     const dev = await pickVulkanDevice(cfg, work);
-    if (dev >= 0) tries.push({ dir: cfg.whisperDir, extra: ['-dev', dev], label: 'GPU (Vulkan)' });
+    if (dev) tries.push({ dir: cfg.whisperDir, extra: ['-dev', dev.i], label: `GPU (Vulkan): ${dev.name}` });
   }
   tries.push({ dir: cfg.whisperDir, extra: ['-ng'], label: 'CPU' });
   let failure;
@@ -111,7 +111,7 @@ async function askGemini(prompt, key) {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.3 } }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.3, thinkingConfig: { thinkingBudget: 1024 } } }), // bounded "thinking": ~3x faster than the default, same clip count
     });
     if (r.ok) {
       const text = (await r.json()).candidates?.[0]?.content?.parts?.[0]?.text;
@@ -128,23 +128,26 @@ async function askGemini(prompt, key) {
 
 // One Gemini call per BLOCK seconds of transcript.
 async function collect(segs, key, onPct) {
-  const found = [];
   const end = segs[segs.length - 1].end;
   const total = Math.ceil(end / BLOCK);
-  for (let n = 0; n < total; n++) {
-    onPct(Math.round((n / total) * 100));
+  let done = 0;
+  onPct(0);
+  // Blocks are independent, so ask for all of them at once (the free tier allows ~10 requests/min).
+  const parts = await Promise.all(Array.from({ length: total }, async (_, n) => {
     const t0 = n * BLOCK;
     const part = segs.filter((s) => s.start >= t0 && s.start < t0 + BLOCK);
-    if (!part.length) continue;
+    if (!part.length) return [];
     const want = Math.max(3, Math.round(Math.min(BLOCK, end - t0) / 300)); // ~1 candidate per 5 min
     const prompt =
       `Voce edita clips virais para TikTok/Reels/Shorts. Abaixo a transcricao com [segundo] no inicio de cada linha.\n` +
       `Escolha ate ${want} trechos de 20 a 60 segundos com forte gancho nos primeiros 3s, historia completa, emocao ou polemica. Seja criterioso na nota: reserve 8-10 so para os melhores.\n` +
       `Responda so JSON: {"clips":[{"start":<seg>,"end":<seg>,"score":<1-10>,"title":"<titulo curto>","reason":"<por que pode viralizar, 1 frase>"}]}\n\n` +
       part.map((s) => `[${Math.round(s.start)}] ${s.text}`).join('\n');
-    found.push(...((await askGemini(prompt, key)).clips || []));
-  }
-  return found;
+    const clips = (await askGemini(prompt, key)).clips || [];
+    onPct(Math.round((++done / total) * 100));
+    return clips;
+  }));
+  return parts.flat();
 }
 
 async function rank(segs, key, emit) {
@@ -162,10 +165,14 @@ async function rank(segs, key, emit) {
 }
 
 // Cuts only: keeps the original resolution/aspect, no crop, no captions (user edits them).
-// Re-encodes (not -c copy) so cuts are frame-accurate instead of snapping to keyframes.
-async function render(file, c, i, outDir, onPct) {
+// 'fast' (default) copies the streams: near-instant, but a clip starts at the keyframe just before c.start (a little extra lead-in).
+// 'precise' re-encodes for frame-accurate cuts. If a copy fails (e.g. a codec mp4 can't hold), that clip is re-encoded.
+async function render(file, c, i, outDir, onPct, cuts) {
   const out = `clip${i + 1}.mp4`;
-  await ffmpegRun(['-y', '-ss', c.start, '-to', c.end, '-i', file, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', 18, '-c:a', 'aac', out], { cwd: outDir }, onPct, c.end - c.start);
+  const cut = (codec) => ffmpegRun(['-y', '-ss', c.start, '-to', c.end, '-i', file, ...codec, out], { cwd: outDir }, onPct, c.end - c.start);
+  const precise = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', 18, '-c:a', 'aac'];
+  if (cuts === 'precise') await cut(precise);
+  else await cut(['-c', 'copy', '-avoid_negative_ts', 'make_zero']).catch(() => cut(precise));
   return path.join(outDir, out);
 }
 
@@ -174,9 +181,19 @@ async function render(file, c, i, outDir, onPct) {
 async function processVideo(file, outDir, log = () => {}, cfg) {
   if (!cfg.geminiKey) throw new Error('Cole sua chave do Gemini em Configuracoes antes de comecar.');
   let last = '';
+  const t = {}; // seconds spent per step
+  let cur = -1, since = Date.now(), engine = '';
   const emit = (step, pct, msg = '') => {
     const k = `${step}:${pct}:${msg}`;
-    if (k !== last) log({ step, pct, msg }), (last = k);
+    if (k === last) return;
+    last = k;
+    if (step !== cur) {
+      if (cur >= 0) t[cur] = Math.round((Date.now() - since) / 1000);
+      cur = step;
+      since = Date.now();
+    }
+    if (step === 1 && msg && !/Detectando|falhou/.test(msg)) engine = msg;
+    log({ step, pct, msg });
   };
   fs.mkdirSync(outDir, { recursive: true });
   // Scratch audio lives in an ASCII-only folder (ProgramData) because whisper-cli can't take non-ANSI paths; removed when done.
@@ -193,10 +210,10 @@ async function processVideo(file, outDir, log = () => {}, cfg) {
     for (const [i, c] of clips.entries()) {
       const msg = `clip ${i + 1}/${clips.length}: ${c.title || ''}`;
       emit(3, Math.round((i / clips.length) * 100), msg);
-      results.push({ ...c, file: await render(file, c, i, outDir, (p) => emit(3, Math.round(((i + p / 100) / clips.length) * 100), msg)) });
+      results.push({ ...c, file: await render(file, c, i, outDir, (p) => emit(3, Math.round(((i + p / 100) / clips.length) * 100), msg), cfg.cuts) });
     }
     emit(4, 100, 'Pronto');
-    return results;
+    return { clips: results, timings: { audio: t[0], transcribe: t[1], rank: t[2], cut: t[3], engine } };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }

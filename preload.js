@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: call('settings-get'),
   saveKey: call('save-key'),
   setMode: call('set-mode'),
+  setCuts: call('set-cuts'),
   installGpu: call('gpu-install'),
   removeGpu: call('gpu-remove'),
   onLog: (cb) => ipcRenderer.on('log', (_e, m) => cb(m)),

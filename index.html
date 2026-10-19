@@ -76,6 +76,7 @@
   .head { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
   .head h2 { margin: 0; font-size: 20px; }
   .head .count { color: var(--muted); }
+  .timings { color: var(--muted); font-size: 12px; margin: -6px 0 16px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; }
   .clip { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; transition: .15s; }
   .clip:hover { border-color: #3a4358; transform: translateY(-2px); }
@@ -131,6 +132,7 @@
 
   <section id="results" class="hidden">
     <div class="head"><h2>Clips gerados</h2><span class="count" id="count"></span></div>
+    <p class="timings" id="timings"></p>
     <div class="grid" id="grid"></div>
   </section>
 </div></main>
@@ -155,6 +157,14 @@
       <button id="gpurm">Remover CUDA</button>
     </div>
     <div class="bar hidden" id="gpubar" style="margin:12px 0 0"><i id="gpubari"></i></div>
+  </div>
+  <div class="cfgsec">
+    <h4>Cortes</h4>
+    <p>Rapidos: copiam o video sem regravar (quase instantaneo); um clip pode comecar alguns segundos antes, no quadro-chave anterior, o que ajuda na edicao. Precisos: regravam o video e comecam exatamente no ponto escolhido, mas levam varios minutos.</p>
+    <select id="cuts">
+      <option value="fast">Rapidos (recomendado)</option>
+      <option value="precise">Precisos (mais lento)</option>
+    </select>
   </div>
   <div class="line end"><button id="close">Fechar</button></div>
 </dialog>
@@ -208,6 +218,7 @@
     $('gpuinst').classList.toggle('hidden', !s.nvidia || s.gpuInstalled);
     $('gpurm').classList.toggle('hidden', !s.gpuInstalled);
     $('mode').value = s.mode === 'cpu' ? 'cpu' : 'auto';
+    $('cuts').value = s.cuts;
     return s;
   }
   $('cfg').onclick = async () => { await loadCfg(); $('dlg').showModal(); };
@@ -221,6 +232,7 @@
     await loadCfg();
   };
   $('mode').onchange = (e) => window.api.setMode(e.target.value);
+  $('cuts').onchange = (e) => window.api.setCuts(e.target.value);
   $('gpurm').onclick = async () => { await window.api.removeGpu(); await loadCfg(); };
   window.api.onGpuProgress((p) => { $('gpubari').style.width = p + '%'; $('gpust').textContent = `Baixando... ${p}%`; });
   $('gpuinst').onclick = async () => {
@@ -253,6 +265,8 @@
       return;
     }
     outDir = r.outDir;
+    const tm = r.timings, f = (s) => (s == null ? '-' : mmss(s));
+    $('timings').textContent = `Tempo total ${f((tm.audio || 0) + (tm.transcribe || 0) + (tm.rank || 0) + (tm.cut || 0))} · Audio ${f(tm.audio)} · Transcricao ${f(tm.transcribe)} (${tm.engine || '-'}) · Gemini ${f(tm.rank)} · Cortes ${f(tm.cut)}`;
     $('count').textContent = `${r.clips.length} ${r.clips.length === 1 ? 'clip' : 'clips'}`;
     $('grid').innerHTML = '';
     for (const [i, c] of r.clips.entries()) {
